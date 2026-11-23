@@ -89,7 +89,7 @@ class GameUI:
             return (-1, -1)
         return (round((pos[0] - view.x) * self.WIDTH / view.width),
                 round((pos[1] - view.y) * self.HEIGHT / view.height))
-
+  
     def _text(self, value: str, x: int, y: int, *, font: str = "body",
               color=None, align: str = "left") -> pygame.Rect:
         surface = self.fonts[font].render(str(value), True, color or self.TEXT)
@@ -103,12 +103,6 @@ class GameUI:
         self.screen.blit(surface, rect)
         return rect
 
-    def _panel(self, x: int, y: int, w: int, h: int, color=None, radius=15,
-               outline=False) -> None:
-        rect = pygame.Rect(x, y, w, h)
-        pygame.draw.rect(self.screen, color or self.SURFACE, rect, border_radius=radius)
-        if outline:
-            pygame.draw.rect(self.screen, self.OUTLINE, rect, width=1, border_radius=radius)
 
     def _button(self, key: str, label: str, rect: tuple[int, int, int, int], *,
                 active: bool = False, strong: bool = False) -> None:

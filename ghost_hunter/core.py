@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from functools import lru_cache
+from dataclasses import dataclass, field
+import math
 from typing import Literal
 
 import numpy as np
@@ -33,30 +33,6 @@ def position_for(index: int, n: int) -> Position:
     return divmod(index, n)
 
 
-@lru_cache(maxsize=None)
-def distance_matrix(n: int) -> np.ndarray:
-    """Precomputed (n*n, n*n) pairwise Manhattan distance matrix."""
-    coords = np.array([position_for(i, n) for i in range(n * n)], dtype=np.int16)
-    matrix = (np.abs(coords[:, None, 0] - coords[None, :, 0])
-              + np.abs(coords[:, None, 1] - coords[None, :, 1]))
-    matrix.setflags(write=False)
-    return matrix
-
-
-@lru_cache(maxsize=None)
-def transition_matrix_for(n: int) -> np.ndarray:
-    """Precomputed row-stochastic transition matrix for a uniform cardinal walk."""
-    size = n * n
-    matrix = np.zeros((size, size), dtype=np.float64)
-    for idx in range(size):
-        adjacent = neighbors(position_for(idx, n), n)
-        weight = 1.0 / len(adjacent)
-        for next_pos in adjacent:
-            matrix[idx, cell_index(next_pos, n)] = weight
-    matrix.setflags(write=False)
-    return matrix
-
-
 class NoisySensor:
     """Clipped Manhattan-distance sensor with exactly modeled discrete noise."""
 
@@ -72,23 +48,6 @@ class NoisySensor:
             -2: remainder / 6, -1: remainder / 3,
             0: accuracy, 1: remainder / 3, 2: remainder / 6,
         }
-        self._offsets = np.array(list(self.noise_distribution.keys()), dtype=np.int64)
-        self._probs = np.array(list(self.noise_distribution.values()), dtype=np.float64)
-        span = self.max_distance + 1
-        table = np.zeros((span, span), dtype=np.float64)
-        for true_d in range(span):
-            for offset, prob in self.noise_distribution.items():
-                table[self.clip(true_d + offset), true_d] += prob
-        table.setflags(write=False)
-        self._likelihood_table = table
-        # H(Z | d) for each true distance d (used for optional mutual information).
-        cond_h = np.zeros(span, dtype=np.float64)
-        for true_d in range(span):
-            col = table[:, true_d]
-            pos = col[col > 0.0]
-            cond_h[true_d] = float(-np.sum(pos * np.log2(pos)))
-        cond_h.setflags(write=False)
-        self.conditional_entropy_by_distance = cond_h
 
     @property
     def max_distance(self) -> int:
@@ -98,7 +57,8 @@ class NoisySensor:
         return max(0, min(self.max_distance, int(reading)))
 
     def noise_sample(self, rng: np.random.Generator) -> int:
-        return int(rng.choice(self._offsets, p=self._probs))
+        return int(rng.choice(list(self.noise_distribution),
+                              p=list(self.noise_distribution.values())))
 
     def read_distance(self, hunter: Position, ghost: Position,
                       rng: np.random.Generator | None = None,
@@ -113,17 +73,8 @@ class NoisySensor:
         """P(observed reading | true distance), including clipping at endpoints."""
         if not (0 <= reading <= self.max_distance):
             return 0.0
-        if 0 <= true_distance <= self.max_distance:
-            return float(self._likelihood_table[reading, true_distance])
         return sum(p for offset, p in self.noise_distribution.items()
                    if self.clip(true_distance + offset) == reading)
-
-    def likelihood_vector(self, reading: int, hunter: Position) -> np.ndarray:
-        """Vectorized P(reading | ghost at cell i) across all grid cells."""
-        if not (0 <= reading <= self.max_distance):
-            return np.zeros(self.grid_size ** 2, dtype=np.float64)
-        dists = distance_matrix(self.grid_size)[cell_index(hunter, self.grid_size)]
-        return self._likelihood_table[reading, dists]
 
 
 class HMMTracker:
@@ -137,8 +88,13 @@ class HMMTracker:
         if grid_size < 2:
             raise ValueError("Grid size must be >= 2.")
         self.grid_size = grid_size
-        self.transition_matrix = transition_matrix_for(grid_size).copy()
-        self.belief = np.full(grid_size ** 2, 1.0 / (grid_size ** 2))
+        size = grid_size ** 2
+        self.transition_matrix = np.zeros((size, size), dtype=np.float64)
+        for idx in range(size):
+            adjacent = neighbors(position_for(idx, grid_size), grid_size)
+            for next_pos in adjacent:
+                self.transition_matrix[idx, cell_index(next_pos, grid_size)] = 1.0 / len(adjacent)
+        self.belief = np.full(size, 1.0 / size)
         self.reset(hunter_start)
 
     def reset(self, hunter_start: Position | None = None) -> None:
@@ -154,7 +110,10 @@ class HMMTracker:
         return self.belief.copy()
 
     def update(self, reading: int, hunter: Position, sensor: NoisySensor) -> np.ndarray:
-        likelihoods = sensor.likelihood_vector(reading, hunter)
+        likelihoods = np.array([
+            sensor.likelihood(reading, manhattan(hunter, position_for(i, self.grid_size)))
+            for i in range(self.grid_size ** 2)
+        ], dtype=np.float64)
         weighted = self.belief * likelihoods
         total = float(weighted.sum())
         if total <= 1e-15:
@@ -244,11 +203,9 @@ class EpisodeScenario:
     @classmethod
     def generate(cls, *, master_seed: int, episode_id: int, grid_size: int,
                  max_turns: int, hunter_start: Position,
-                 sensor: NoisySensor, ghost_bias: float = 0.0) -> "EpisodeScenario":
+                 sensor: NoisySensor) -> "EpisodeScenario":
         if max_turns < 1:
             raise ValueError("max_turns must be positive")
-        if not 0.0 <= ghost_bias <= 1.0:
-            raise ValueError("ghost_bias must be in [0, 1]")
         ghost_rng, noise_rng = [np.random.default_rng(seed)
                                 for seed in np.random.SeedSequence(
                                     [master_seed, episode_id]).spawn(2)]
@@ -258,19 +215,7 @@ class EpisodeScenario:
         path = [start]
         for _ in range(max_turns):
             options = neighbors(path[-1], grid_size)
-            if ghost_bias == 0.0 or len(path) < 2 or len(options) == 1:
-                path.append(options[int(ghost_rng.integers(len(options)))])
-            else:
-                # Non-backtracking momentum bias for model-mismatch robustness tests:
-                # reduces the weight of immediately returning to path[-2].
-                prev = path[-2]
-                weights = np.array(
-                    [1.0 - ghost_bias if opt == prev else 1.0 for opt in options],
-                    dtype=np.float64,
-                )
-                weights /= weights.sum()
-                choice_idx = int(ghost_rng.choice(len(options), p=weights))
-                path.append(options[choice_idx])
+            path.append(options[int(ghost_rng.integers(len(options)))])
         noise = tuple(sensor.noise_sample(noise_rng) for _ in range(max_turns + 1))
         return cls(tuple(path), noise, episode_id)
 
@@ -329,9 +274,7 @@ class GameSession:
         self.reading = self.sensor.read_distance(
             self.environment.hunter_position, self.environment.ghost_position,
             noise_offset=self.scenario.noise_offsets[0])
-        self._baseline_cache: tuple[tuple[int, int, Position], np.ndarray] | None = None
-        if self.mode != "baseline":
-            self.tracker.update(self.reading, self.environment.hunter_position, self.sensor)
+        self.tracker.update(self.reading, self.environment.hunter_position, self.sensor)
         self.history: list[TurnRecord] = []
         self._record()
 
@@ -346,15 +289,12 @@ class GameSession:
 
     def sensor_only_belief(self) -> np.ndarray:
         """Inference from the current reading and a flat prior, no past observations."""
-        cache_key = (self.turns, self.reading, self.hunter_position)
-        if self._baseline_cache is not None and self._baseline_cache[0] == cache_key:
-            return self._baseline_cache[1].copy()
-        weights = self.sensor.likelihood_vector(self.reading, self.hunter_position)
-        total = float(weights.sum())
-        belief = (weights / total if total > 0.0
-                  else np.full(len(weights), 1.0 / len(weights), dtype=np.float64))
-        self._baseline_cache = (cache_key, belief)
-        return belief.copy()
+        weights = np.array([
+            self.sensor.likelihood(self.reading, manhattan(
+                self.hunter_position, position_for(i, self.grid_size)))
+            for i in range(self.grid_size ** 2)], dtype=float)
+        total = weights.sum()
+        return weights / total if total > 0 else np.full(len(weights), 1 / len(weights))
 
     @property
     def visible_belief(self) -> np.ndarray:
@@ -395,8 +335,7 @@ class GameSession:
                 self._record()
                 return True
             self.last_capture_missed = True
-            if self.mode != "baseline":
-                self.tracker.exclude_cell(self.hunter_position)
+            self.tracker.exclude_cell(self.hunter_position)
         else:
             moved = self.environment.move_hunter(action)
             if not moved:
@@ -408,9 +347,8 @@ class GameSession:
         self.reading = self.sensor.read_distance(
             self.hunter_position, self.ghost_position,
             noise_offset=self.scenario.noise_offsets[self.turns])
-        if self.mode != "baseline":
-            self.tracker.predict()
-            self.tracker.update(self.reading, self.hunter_position, self.sensor)
+        self.tracker.predict()
+        self.tracker.update(self.reading, self.hunter_position, self.sensor)
         self.finished = self.turns >= self.max_turns
         self._record()
         return True
@@ -427,5 +365,4 @@ class GameSession:
             "mean_localization_error": float(np.mean(errors)),
             "mean_true_cell_probability": float(np.mean(
                 [rec.true_cell_probability for rec in self.history])),
-            "mean_entropy": float(np.mean([rec.entropy for rec in self.history])),
         }

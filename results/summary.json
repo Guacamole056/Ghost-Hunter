@@ -12,30 +12,20 @@
     "episodes": 100,
     "captures": 100,
     "capture_rate_pct": 100.0,
-    "mean_turns_to_capture": 21.42,
-    "median_turns_to_capture": 18.0,
-    "std_turns_to_capture": 13.83,
-    "mean_turns_all_episodes": 21.42,
-    "mean_movement_to_capture": 17.68,
-    "mean_localization_error": 3.125,
-    "mean_true_cell_probability": 0.1761,
-    "mean_entropy": 3.496,
-    "mean_runtime_ms": 1.346,
-    "mean_runtime_ms_per_turn": 0.0628
+    "mean_turns_to_capture": 20.6,
+    "mean_movement_to_capture": 16.84,
+    "mean_localization_error": 3.167,
+    "mean_true_cell_probability": 0.1786,
+    "mean_runtime_ms": 7.129
   },
   "baseline": {
     "episodes": 100,
     "captures": 51,
     "capture_rate_pct": 51.0,
-    "mean_turns_to_capture": 34.63,
-    "median_turns_to_capture": 35.0,
-    "std_turns_to_capture": 22.39,
-    "mean_turns_all_episodes": 56.86,
-    "mean_movement_to_capture": 27.78,
-    "mean_localization_error": 5.952,
-    "mean_true_cell_probability": 0.0583,
-    "mean_entropy": 5.058,
-    "mean_runtime_ms": 3.363,
-    "mean_runtime_ms_per_turn": 0.0591
+    "mean_turns_to_capture": 34.02,
+    "mean_movement_to_capture": 27.25,
+    "mean_localization_error": 5.881,
+    "mean_true_cell_probability": 0.0595,
+    "mean_runtime_ms": 46.182
   }
 }

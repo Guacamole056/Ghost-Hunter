@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.DS_Store
+# Generated personal play records and screenshots should stay local.
+results/human_scores.json
+results/human_scores.lock
+results/human_scores.*.bak
+results/human_scores.*.tmp
+results/screenshots/
+# Intentionally TRACK the 100-episode results, CSVs, and required plots.

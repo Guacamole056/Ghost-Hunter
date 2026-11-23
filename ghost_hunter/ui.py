@@ -14,16 +14,15 @@ except ImportError as exc:
 from .agents import HunterAgent
 from .core import GameSession, cell_index, position_for
 from .evaluation import PROJECT_ROOT
+from .scores import InvalidScoreHistory, append_score, read_scores
 
 
 class GameUI:
     """Compact, keyboard-friendly desktop UI with no external image assets."""
 
     WIDTH, HEIGHT = 1250, 840
-    BOARD_PANEL_X, BOARD_PANEL_Y, BOARD_PANEL_SIZE = 51, 171, 581
-    BOARD_X, BOARD_Y, BOARD_SIZE = 88, 204, 532
-    PANEL_X, PANEL_W = 668, 517
-    ACCURACY_PRESETS = (0.40, 0.60, 0.80, 1.00)
+    BOARD_X, BOARD_Y, BOARD_SIZE = 64, 182, 555
+    PANEL_X, PANEL_W = 672, 513
     BG = (13, 23, 30)
     SURFACE = (20, 35, 44)
     SURFACE2 = (27, 46, 55)
@@ -66,7 +65,6 @@ class GameUI:
         self.sensor_accuracy = sensor_accuracy
         self.seed = seed
         self.heatmap_enabled = True
-        self._used_heatmap_in_episode = True
         self.show_scores = False
         self.autoplay = False
         self.auto_interval = 300
@@ -74,9 +72,7 @@ class GameUI:
         self.running = True
         self.status = "The ghost is hidden. Use the noisy reading to track it."
         self.hitboxes: dict[str, pygame.Rect] = {}
-        self._modal_rect: pygame.Rect | None = None
         self._result_saved = False
-        self.agent: HunterAgent | None = HunterAgent(mode) if mode != "human" else None
         self.session = GameSession(mode=mode, grid_size=grid_size,
                                    max_turns=max_turns,
                                    sensor_accuracy=sensor_accuracy, seed=seed)
@@ -108,21 +104,17 @@ class GameUI:
         return rect
 
     def _panel(self, x: int, y: int, w: int, h: int, color=None, radius=15,
-               outline=False, outline_color=None) -> None:
+               outline=False) -> None:
         rect = pygame.Rect(x, y, w, h)
         pygame.draw.rect(self.screen, color or self.SURFACE, rect, border_radius=radius)
         if outline:
-            pygame.draw.rect(self.screen, outline_color or self.OUTLINE, rect,
-                             width=1, border_radius=radius)
+            pygame.draw.rect(self.screen, self.OUTLINE, rect, width=1, border_radius=radius)
 
     def _button(self, key: str, label: str, rect: tuple[int, int, int, int], *,
-                active: bool = False, strong: bool = False,
-                modal: bool = False) -> None:
+                active: bool = False, strong: bool = False) -> None:
         area = pygame.Rect(*rect)
-        interactive = modal or not self.show_scores
-        if interactive:
-            self.hitboxes[key] = area
-        hovered = interactive and area.collidepoint(self._to_logical(pygame.mouse.get_pos()))
+        self.hitboxes[key] = area
+        hovered = area.collidepoint(self._to_logical(pygame.mouse.get_pos()))
         if active or strong:
             fill = self.MINT if active else (55, 164, 147)
             fg = self.BG
@@ -142,27 +134,9 @@ class GameUI:
                                    max_turns=self.max_turns,
                                    sensor_accuracy=self.sensor_accuracy,
                                    seed=self.seed)
-        self.agent = HunterAgent(mode) if mode != "human" else None
         self.autoplay = False
         self._result_saved = False
-        self._used_heatmap_in_episode = self.heatmap_enabled
-        self.status = f"New {self._mode_label()} episode (seed {self.seed}, {self.sensor_accuracy * 100:.0f}% accuracy)."
-
-    def _set_accuracy(self, accuracy: float) -> None:
-        if abs(self.sensor_accuracy - accuracy) < 1e-6:
-            return
-        self.sensor_accuracy = accuracy
-        self.new_game()
-        self.status = f"Sensor accuracy set to {accuracy * 100:.0f}% exact. Started fresh episode."
-
-    def _adjust_speed(self, delta_ms: int) -> None:
-        self.auto_interval = max(50, min(1000, self.auto_interval + delta_ms))
-        self.status = f"Autoplay speed set to {self.auto_interval} ms / turn."
-
-    def _toggle_heatmap(self) -> None:
-        self.heatmap_enabled = not self.heatmap_enabled
-        if self.heatmap_enabled and not self.session.finished:
-            self._used_heatmap_in_episode = True
+        self.status = f"New {self._mode_label()} episode. Ghost position is hidden."
 
     def _mode_label(self) -> str:
         return {"human": "Human", "ai": "HMM AI", "baseline": "Sensor-only"}[self.session.mode]
@@ -173,20 +147,16 @@ class GameUI:
     def _save_human_score(self) -> None:
         if self._result_saved or not self.session.finished or self.session.mode != "human":
             return
-        path = self._human_score_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {"date": datetime.now().isoformat(timespec="seconds"),
+                  "seed": self.seed, **self.session.result()}
         try:
-            data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-            data.append({"date": datetime.now().isoformat(timespec="seconds"),
-                         "seed": self.seed,
-                         "sensor_accuracy": self.sensor_accuracy,
-                         "heatmap_used": self._used_heatmap_in_episode,
-                         **self.session.result()})
-            path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            backup = append_score(self._human_score_path(), record)
         except OSError:
-            self.status = "Score not saved (folder is read-only)."
-        else:
-            self._result_saved = True
+            self.status = "Could not save this score. Check the results folder permissions."
+            return
+        self._result_saved = True
+        if backup is not None:
+            self.status = f"Score saved. Previous score file backed up as {backup.name}."
 
     def take_turn(self, action: str) -> None:
         if self.session.finished:
@@ -195,11 +165,9 @@ class GameUI:
             self.status = "Invalid move: board edge reached."
             return
         if self.session.captured:
-            gr, gc = self.session.ghost_position
-            self.status = f"Captured at R{gr + 1:02} C{gc + 1:02} in {self.session.turns} turns!"
+            self.status = f"Captured in {self.session.turns} turns!"
         elif self.session.finished:
-            gr, gc = self.session.ghost_position
-            self.status = f"Turn limit reached. Ghost revealed at R{gr + 1:02} C{gc + 1:02}."
+            self.status = "Turn limit reached. The ghost escaped."
         elif self.session.last_capture_missed:
             self.status = "Capture missed. Belief updated; ghost moved again."
         else:
@@ -211,9 +179,7 @@ class GameUI:
     def _ai_turn(self) -> None:
         if self.session.mode == "human" or self.session.finished:
             return
-        if self.agent is None or self.agent.strategy != self.session.mode:
-            self.agent = HunterAgent(self.session.mode)
-        action = self.agent.choose_action(self.session)
+        action = HunterAgent(self.session.mode).choose_action(self.session)
         self.take_turn(action)
 
     def _screenshot(self) -> None:
@@ -224,12 +190,10 @@ class GameUI:
         self.status = f"Screenshot saved: {path.name}"
 
     def _click(self, key: str) -> None:
-        if key == "close_scores":
-            self.show_scores = False
-        elif key in ("human", "ai", "baseline"):
+        if key in ("human", "ai", "baseline"):
             self.new_game(key)
         elif key == "heatmap":
-            self._toggle_heatmap()
+            self.heatmap_enabled = not self.heatmap_enabled
         elif key == "restart":
             self.new_game()
         elif key == "new_seed":
@@ -238,38 +202,18 @@ class GameUI:
             self.show_scores = not self.show_scores
         elif key == "step":
             self._ai_turn()
-        elif key == "capture":
-            if self.session.mode == "human":
-                self.take_turn("capture")
-        elif key == "speed_slower":
-            self._adjust_speed(50)
-        elif key == "speed_faster":
-            self._adjust_speed(-50)
         elif key == "autoplay":
             if self.session.mode != "human" and not self.session.finished:
                 self.autoplay = not self.autoplay
                 self.last_ai_tick = pygame.time.get_ticks()
-        elif key.startswith("acc_"):
-            self._set_accuracy(float(key.split("_", 1)[1]))
 
     def handle_events(self) -> None:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-            elif self.show_scores:
-                if event.type == pygame.KEYDOWN and event.key in (pygame.K_TAB, pygame.K_ESCAPE):
-                    self.show_scores = False
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    pos = self._to_logical(event.pos)
-                    close_rect = self.hitboxes.get("close_scores")
-                    if close_rect and close_rect.collidepoint(pos):
-                        self.show_scores = False
-                    elif self._modal_rect and not self._modal_rect.collidepoint(pos):
-                        self.show_scores = False
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                pos = self._to_logical(event.pos)
                 for key, rect in tuple(self.hitboxes.items()):
-                    if rect.collidepoint(pos):
+                    if rect.collidepoint(self._to_logical(event.pos)):
                         self._click(key)
                         break
             elif event.type == pygame.KEYDOWN:
@@ -283,11 +227,11 @@ class GameUI:
                 elif event.key == pygame.K_n:
                     self.new_game(next_seed=True)
                 elif event.key == pygame.K_h:
-                    self._toggle_heatmap()
+                    self.heatmap_enabled = not self.heatmap_enabled
                 elif event.key == pygame.K_p:
                     self._screenshot()
                 elif event.key == pygame.K_TAB:
-                    self.show_scores = True
+                    self.show_scores = not self.show_scores
                 elif event.key == pygame.K_SPACE:
                     self._ai_turn()
                 elif event.key == pygame.K_a and self.session.mode != "human":
@@ -295,9 +239,9 @@ class GameUI:
                         self.autoplay = not self.autoplay
                         self.last_ai_tick = pygame.time.get_ticks()
                 elif event.key == pygame.K_LEFTBRACKET:
-                    self._adjust_speed(50)
+                    self.auto_interval = min(1000, self.auto_interval + 50)
                 elif event.key == pygame.K_RIGHTBRACKET:
-                    self._adjust_speed(-50)
+                    self.auto_interval = max(50, self.auto_interval - 50)
                 elif self.session.mode == "human":
                     actions = {
                         pygame.K_UP: "up", pygame.K_w: "up",
@@ -311,51 +255,24 @@ class GameUI:
                         self.take_turn(action)
 
     def _draw_header(self) -> None:
-        ghost_rect = self._text("GHOST", 52, 30, font="display", color=self.TEXT)
-        self._text("/ HUNTER", ghost_rect.right + 10, 30, font="display", color=self.MINT)
-        self._text("PROBABILISTIC TRACKING LAB", 54, 84, font="small", color=self.MUTED)
-        self._text("HIDDEN MARKOV MODEL  /  FORWARD INFERENCE", 1185, 42,
+        title = self._text("GHOST", 64, 34, font="display", color=self.TEXT)
+        self._text("/ HUNTER", title.right + 6, 34, font="display", color=self.MINT)
+        self._text("PROBABILISTIC TRACKING LAB", 66, 89, font="small", color=self.MUTED)
+        self._text("HIDDEN MARKOV MODEL  /  FORWARD INFERENCE", 1185, 47,
                    font="small", color=self.MUTED, align="right")
-        self._button("scores", "TAB   SCOREBOARD", (929, 76, 256, 30))
-        pygame.draw.line(self.screen, self.OUTLINE, (51, 116), (1185, 116), 1)
-        if self.session.finished:
-            accent = self.MINT if self.session.captured else self.DANGER
-            bg = (19, 44, 46) if self.session.captured else (48, 28, 30)
-            self._panel(self.BOARD_PANEL_X, 127, self.BOARD_PANEL_SIZE, 36,
-                        color=bg, radius=10, outline=True, outline_color=accent)
-            title = "GHOST CAPTURED" if self.session.captured else "GHOST ESCAPED"
-            gr, gc = self.session.ghost_position
-            sub = f"{self.session.turns} turns  ·  {self.session.distance_traveled} moves  ·  Ghost R{gr + 1:02} C{gc + 1:02}"
-            self._text(title, self.BOARD_PANEL_X + 14, 134, font="section", color=accent)
-            self._text(sub, self.BOARD_PANEL_X + self.BOARD_PANEL_SIZE - 14, 137,
-                       font="small", color=self.TEXT, align="right")
-        else:
-            self._text("LIVE GRID", 52, 136, font="section")
-            self._text(f"{self.grid_size} x {self.grid_size}  /  SEED {self.seed}",
-                       632, 141, font="small", color=self.MUTED, align="right")
+        self._button("scores", "TAB   SCOREBOARD", (929, 81, 256, 30))
+        pygame.draw.line(self.screen, self.OUTLINE, (64, 116), (1185, 116), 1)
+        self._text("LIVE GRID", 64, 143, font="section")
+        self._text(f"{self.grid_size} x {self.grid_size}  /  SEED {self.seed}",
+                   618, 148, font="small", color=self.MUTED, align="right")
 
     def _draw_board(self) -> None:
-        self._panel(self.BOARD_PANEL_X, self.BOARD_PANEL_Y,
-                    self.BOARD_PANEL_SIZE, self.BOARD_PANEL_SIZE,
+        self._panel(self.BOARD_X - 13, self.BOARD_Y - 13,
+                    self.BOARD_SIZE + 26, self.BOARD_SIZE + 26,
                     color=self.SURFACE, outline=True)
         side = self.BOARD_SIZE / self.grid_size
         belief = self.session.visible_belief
         max_p = max(float(belief.max()), 1e-12)
-        hr, hc = self.session.hunter_position
-        compact_axes = self.grid_size > 12
-
-        # Row and column coordinate labels aligned with grid cells.
-        for idx in range(self.grid_size):
-            col_cx = int(self.BOARD_X + (idx + 0.5) * side)
-            row_cy = int(self.BOARD_Y + (idx + 0.5) * side)
-            col_label = f"{idx + 1}" if compact_axes else f"C{idx + 1}"
-            row_label = f"{idx + 1}" if compact_axes else f"R{idx + 1}"
-            self._text(col_label, col_cx, self.BOARD_Y - 15, font="mini",
-                       color=self.MINT if idx == hc else self.MUTED, align="center")
-            self._text(row_label, self.BOARD_X - 18, row_cy, font="mini",
-                       color=self.MINT if idx == hr else self.MUTED, align="center")
-
-        ghost_pos = self.session.ghost_position if self.session.finished else None
         for r in range(self.grid_size):
             for c in range(self.grid_size):
                 rect = pygame.Rect(round(self.BOARD_X + c * side),
@@ -367,22 +284,19 @@ class GameUI:
                 if self.heatmap_enabled:
                     scale = (probability / max_p) ** 0.65
                     color = color.lerp(pygame.Color(*self.MINT), min(0.82, scale * 0.68))
-                if ghost_pos == (r, c):
-                    color = color.lerp(pygame.Color(*self.DANGER), 0.32)
                 pygame.draw.rect(self.screen, color, rect, border_radius=2)
-                border_col = self.DANGER if ghost_pos == (r, c) else (40, 66, 73)
-                border_w = 2 if ghost_pos == (r, c) else 1
-                pygame.draw.rect(self.screen, border_col, rect, width=border_w, border_radius=2)
-                if (self.heatmap_enabled and side >= 40 and probability >= 0.012
-                        and (r, c) != (hr, hc) and (r, c) != ghost_pos):
+                # Keep the grid readable even without heatmap.
+                pygame.draw.rect(self.screen, (40, 66, 73), rect, width=1, border_radius=2)
+                if self.heatmap_enabled and side >= 40 and probability >= 0.012:
                     txt_color = (9, 26, 31) if probability / max_p > 0.45 else self.MUTED
                     label = f"{probability * 100:.0f}%"
-                    self._text(label, rect.x + 5, rect.y + 4, font="mini", color=txt_color)
+                    self._text(label, rect.x + 6, rect.y + 5, font="mini", color=txt_color)
 
-        center = (int(self.BOARD_X + (hc + 0.5) * side),
-                  int(self.BOARD_Y + (hr + 0.5) * side))
-        radius = max(8, int(side * 0.29))
-        pygame.draw.circle(self.screen, (7, 24, 29), center, radius + 5)
+        hr, hc = self.session.hunter_position
+        center = (int(self.BOARD_X + (hc + .5) * side),
+                  int(self.BOARD_Y + (hr + .5) * side))
+        radius = max(8, int(side * .29))
+        pygame.draw.circle(self.screen, (7, 24, 29), center, radius + 6)
         pygame.draw.circle(self.screen, self.LIGHT, center, radius, width=3)
         pygame.draw.circle(self.screen, self.LIGHT, center, 4)
         pygame.draw.line(self.screen, self.LIGHT,
@@ -391,206 +305,171 @@ class GameUI:
         pygame.draw.line(self.screen, self.LIGHT,
                          (center[0] + radius - 1, center[1]),
                          (center[0] + radius + 6, center[1]), 2)
-
-        if ghost_pos is not None:
-            gr, gc = ghost_pos
-            ghost_center = (int(self.BOARD_X + (gc + 0.5) * side),
-                            int(self.BOARD_Y + (gr + 0.5) * side))
-            if ghost_pos == (hr, hc):
-                # Captured on the hunter's cell: draw outer ring + corner badge so both stay readable.
-                pygame.draw.circle(self.screen, self.DANGER, ghost_center, radius + 7, width=3)
-                badge_x = round(self.BOARD_X + (gc + 1) * side) - 11
-                badge_y = round(self.BOARD_Y + gr * side) + 10
-                pygame.draw.circle(self.screen, self.DANGER, (badge_x, badge_y), 8)
-                self._text("G", badge_x, badge_y, font="mini", color=self.BG, align="center")
-            else:
-                pygame.draw.circle(self.screen, (42, 18, 20), ghost_center, radius + 4)
-                pygame.draw.circle(self.screen, self.DANGER, ghost_center, radius + 3, width=3)
-                self._text("G", ghost_center[0], ghost_center[1], font="mono",
-                           color=self.DANGER, align="center")
+        if self.session.finished:
+            gr, gc = self.session.ghost_position
+            ghost_center = (int(self.BOARD_X + (gc + .5) * side),
+                            int(self.BOARD_Y + (gr + .5) * side))
+            pygame.draw.circle(self.screen, self.DANGER, ghost_center, radius + 3, width=4)
+            self._text("G", ghost_center[0], ghost_center[1], font="mono",
+                       color=self.DANGER, align="center")
+        if self.session.finished:
+            title = "GHOST CAPTURED" if self.session.captured else "GHOST ESCAPED"
+            sub = f"{self.session.turns} turns  /  {self.session.distance_traveled} moves"
+            box = pygame.Surface((440, 92), pygame.SRCALPHA)
+            pygame.draw.rect(box, (12, 26, 33, 235), box.get_rect(), border_radius=12)
+            self.screen.blit(box, (self.BOARD_X + (self.BOARD_SIZE - 440) // 2,
+                                   self.BOARD_Y + self.BOARD_SIZE // 2 - 46))
+            self._text(title, self.BOARD_X + self.BOARD_SIZE // 2,
+                       self.BOARD_Y + self.BOARD_SIZE // 2 - 15,
+                       font="title", color=self.MINT if self.session.captured else self.DANGER,
+                       align="center")
+            self._text(sub, self.BOARD_X + self.BOARD_SIZE // 2,
+                       self.BOARD_Y + self.BOARD_SIZE // 2 + 19,
+                       font="small", color=self.TEXT, align="center")
 
     def _draw_below_board(self) -> None:
-        self._text("HUNTER", 54, 766, font="mini", color=self.MUTED)
-        pygame.draw.circle(self.screen, self.LIGHT, (120, 774), 7, width=2)
-        self._text("BELIEF", 160, 766, font="mini", color=self.MUTED)
-        pygame.draw.rect(self.screen, self.MINT, (212, 768, 12, 12), border_radius=2)
-        if self.session.finished:
-            self._text("GHOST", 252, 766, font="mini", color=self.MUTED)
-            pygame.draw.circle(self.screen, self.DANGER, (310, 774), 7, width=2)
-            self._text("GHOST POSITION REVEALED", 632, 766, font="mini",
-                       color=self.MINT if self.session.captured else self.DANGER,
-                       align="right")
-        else:
-            self._text("GHOST HIDDEN UNTIL GAME ENDS", 632, 766, font="mini",
-                       color=self.MUTED, align="right")
+        self._text("HUNTER", 65, 766, font="mini", color=self.MUTED)
+        pygame.draw.circle(self.screen, self.LIGHT, (132, 775), 7, width=2)
+        self._text("BELIEF", 184, 766, font="mini", color=self.MUTED)
+        pygame.draw.rect(self.screen, self.MINT, (236, 768, 12, 12), border_radius=2)
+        self._text("GHOST HIDDEN UNTIL GAME ENDS", 618, 767, font="mini",
+                   color=self.MUTED, align="right")
 
     def _draw_info(self) -> None:
         x, w = self.PANEL_X, self.PANEL_W
-
-        # Panel 1: Sensor observation & live accuracy selector
-        self._panel(x, 127, w, 148, outline=True)
-        self._text("SENSOR  /  CURRENT OBSERVATION", x + 20, 141,
+        self._panel(x, 132, w, 140, outline=True)
+        self._text("SENSOR  /  CURRENT OBSERVATION", x + 22, 149,
                    font="small", color=self.MUTED)
-        self._text("NOISE: -2 / -1 / 0 / +1 / +2", x + w - 20, 143,
-                   font="mini", color=self.MUTED, align="right")
-        reading_rect = self._text(f"{self.session.reading:02d}", x + 20, 170,
-                                  font="display", color=self.MINT)
-        self._text("CELLS", reading_rect.right + 12, 188, font="small", color=self.MUTED)
-        self._text("NOISY MANHATTAN DISTANCE", x + 20, 232,
+        self._text(f"{self.session.reading:02d}", x + 20, 178, font="display", color=self.MINT)
+        self._text("CELLS", x + 108, 191, font="small", color=self.MUTED)
+        self._text("NOISY MANHATTAN DISTANCE", x + 22, 239,
                    font="mini", color=self.MUTED)
-        self._text(f"EXACT ACCURACY ({self.sensor_accuracy * 100:.0f}%)", x + w - 20, 173,
-                   font="mini", color=self.MUTED, align="right")
-        for i, acc in enumerate(self.ACCURACY_PRESETS):
-            bx = x + 239 + i * 66
-            self._button(f"acc_{acc:.2f}", f"{acc * 100:.0f}%", (bx, 196, 60, 32),
-                         active=abs(self.sensor_accuracy - acc) < 1e-6)
-        self._text("Click to switch sensor noise & restart", x + w - 20, 238,
+        self._text(f"Zero noise: {self.sensor_accuracy * 100:.0f}%", x + w - 20, 192,
+                   font="small", color=self.TEXT, align="right")
+        self._text("Noise: -2 / -1 / 0 / +1 / +2", x + w - 20, 233,
                    font="mini", color=self.MUTED, align="right")
 
-        # Panel 2: Belief posterior + entropy
-        self._panel(x, 285, w, 114, outline=True)
+        self._panel(x, 284, w, 118, outline=True)
         name = "HMM POSTERIOR" if self.session.mode != "baseline" else "SENSOR-ONLY ESTIMATE"
-        self._text(name, x + 20, 298, font="small", color=self.MUTED)
-        entropy = self.session.history[-1].entropy if self.session.history else 0.0
-        self._text(f"ENTROPY  {entropy:.2f} BITS", x + w - 20, 300,
-                   font="mini", color=self.MUTED, align="right")
+        self._text(name, x + 22, 298, font="small", color=self.MUTED)
         belief = self.session.visible_belief
         top_idx = int(belief.argmax())
         likely = position_for(top_idx, self.grid_size)
-        self._text(f"R{likely[0] + 1:02}  ·  C{likely[1] + 1:02}", x + 20, 326, font="title")
-        self._text(f"{belief[top_idx] * 100:.1f}%", x + w - 20, 326,
+        self._text(f"R{likely[0] + 1:02}  ·  C{likely[1] + 1:02}", x + 22, 329, font="title")
+        self._text(f"{belief[top_idx] * 100:.1f}%", x + w - 22, 329,
                    font="title", color=self.MINT, align="right")
-        track = pygame.Rect(x + 20, 376, w - 40, 6)
+        track = pygame.Rect(x + 22, 380, w - 44, 5)
         pygame.draw.rect(self.screen, self.OUTLINE, track, border_radius=3)
         fill = track.copy()
         fill.width = max(2, int(track.width * float(belief[top_idx])))
         pygame.draw.rect(self.screen, self.MINT, fill, border_radius=3)
 
-        # Panel 3: Episode status
-        self._panel(x, 409, w, 98, outline=True)
-        self._text("EPISODE STATUS", x + 20, 421, font="small", color=self.MUTED)
+        self._panel(x, 414, w, 112, outline=True)
+        self._text("EPISODE STATUS", x + 22, 429, font="small", color=self.MUTED)
         stat_items = (("TURNS", f"{self.session.turns:02} / {self.max_turns}"),
                       ("MOVES", str(self.session.distance_traveled)),
                       ("ATTEMPTS", str(self.session.capture_attempts)))
         for i, (label, value) in enumerate(stat_items):
-            ix = x + 22 + i * 165
-            self._text(label, ix, 446, font="mini", color=self.MUTED)
-            self._text(value, ix, 466, font="section")
-        pygame.draw.line(self.screen, self.OUTLINE, (x + 178, 444), (x + 178, 494), 1)
-        pygame.draw.line(self.screen, self.OUTLINE, (x + 344, 444), (x + 344, 494), 1)
+            ix = x + 24 + i * 162
+            self._text(label, ix, 457, font="mini", color=self.MUTED)
+            self._text(value, ix, 479, font="section")
+        pygame.draw.line(self.screen, self.OUTLINE, (x + 184, 454), (x + 184, 512), 1)
+        pygame.draw.line(self.screen, self.OUTLINE, (x + 346, 454), (x + 346, 512), 1)
 
-        # Panel 4: Control center + speed bar / capture button
-        self._panel(x, 517, w, 186, outline=True)
-        self._text("CONTROL CENTER", x + 20, 529, font="small", color=self.MUTED)
+        self._panel(x, 538, w, 158, outline=True)
+        self._text("CONTROL CENTER", x + 22, 551, font="small", color=self.MUTED)
         choices = (("human", "1   HUMAN"), ("ai", "2   HMM AI"),
                    ("baseline", "3   BASELINE"))
         for i, (key, label) in enumerate(choices):
-            bx = x + 18 + i * 163
-            self._button(key, label, (bx, 556, 155, 36), active=self.session.mode == key)
+            bx = x + 18 + i * 161
+            self._button(key, label, (bx, 585, 154, 37), active=self.session.mode == key)
         if self.session.mode == "human":
-            self._text("MOVE: WASD / ARROW KEYS", x + 20, 616, font="small")
-            self._button("capture", "C   ATTEMPT CAPTURE", (x + 278, 605, 221, 38),
-                         strong=not self.session.finished)
-            assist_msg = (
-                "Heatmap assistance ON  ·  press H to play unassisted"
-                if self.heatmap_enabled
-                else "Heatmap OFF  ·  unassisted human play"
-            )
-            self._text(assist_msg, x + 20, 662, font="mini", color=self.MUTED)
+            self._text("MOVE: WASD / ARROWS", x + 22, 642, font="small")
+            self._text("C  ATTEMPT CAPTURE", x + 261, 642, font="small")
         else:
-            self._button("step", "SPACE   STEP", (x + 18, 605, 234, 38))
+            self._button("step", "SPACE  STEP", (x + 18, 635, 230, 41))
             name = "PAUSE" if self.autoplay else "A   AUTOPLAY"
-            self._button("autoplay", name, (x + 265, 605, 234, 38), strong=self.autoplay)
-            self._text("SPEED  ([ / ])", x + 20, 663, font="mini", color=self.MUTED)
-            self._button("speed_slower", "- SLOWER", (x + 220, 654, 88, 32))
-            self._text(f"{self.auto_interval} ms", x + 358, 670,
-                       font="small", color=self.TEXT, align="center")
-            self._button("speed_faster", "+ FASTER", (x + 411, 654, 88, 32))
+            self._button("autoplay", name, (x + 263, 635, 230, 41), strong=self.autoplay)
 
-        # Panel 5: Utility bar
-        self._panel(x, 713, w, 71, outline=True)
+        self._panel(x, 708, w, 76, outline=True)
         self._button("heatmap", "H   HEATMAP  " + ("ON" if self.heatmap_enabled else "OFF"),
-                     (x + 16, 727, 186, 43), active=self.heatmap_enabled)
-        self._button("restart", "R   RESTART", (x + 212, 727, 138, 43))
-        self._button("new_seed", "N   NEW SEED", (x + 360, 727, 141, 43))
+                     (x + 14, 723, 180, 45), active=self.heatmap_enabled)
+        self._button("restart", "R   RESTART", (x + 206, 723, 137, 45))
+        self._button("new_seed", "N   NEW SEED", (x + 354, 723, 145, 45))
 
     def _draw_footer(self) -> None:
-        pygame.draw.line(self.screen, self.OUTLINE, (51, 802), (1185, 802), 1)
+        pygame.draw.line(self.screen, self.OUTLINE, (64, 802), (1185, 802), 1)
         message = self.status
-        if len(message) > 95:
-            message = message[:92] + "..."
-        self._text(message, 52, 811, font="small", color=self.MUTED)
-        self._text("P  SAVE SCREENSHOT    ·    ESC  QUIT", 1185, 812,
+        if len(message) > 97:
+            message = message[:94] + "..."
+        self._text(message, 65, 811, font="small", color=self.MUTED)
+        self._text("P  SAVE SCREENSHOT    ·    ESC  QUIT", 1184, 812,
                    font="mini", color=self.MUTED, align="right")
-
-    def _human_row(self, label: str, items: list[dict]) -> tuple[str, str, str, str, str]:
-        completed = [item for item in items if item.get("captured")]
-        count = len(items)
-        return (
-            label,
-            str(count),
-            f"{100 * len(completed) / count:.1f}%" if count else "—",
-            f"{sum(r['turns'] for r in completed) / len(completed):.1f}" if completed else "—",
-            f"{sum(r['distance'] for r in completed) / len(completed):.1f}" if completed else "—",
-        )
 
     def _draw_scoreboard(self) -> None:
         backdrop = pygame.Surface((self.WIDTH, self.HEIGHT), pygame.SRCALPHA)
         backdrop.fill((4, 15, 21, 224))
         self.screen.blit(backdrop, (0, 0))
-        x, y, w, h = 150, 118, 950, 594
-        self._modal_rect = pygame.Rect(x, y, w, h)
+        x, y, w, h = 168, 156, 916, 515
         self._panel(x, y, w, h, color=self.SURFACE, outline=True)
-        self._text("HUMAN VS AI  /  PERFORMANCE", x + 30, y + 24, font="title")
-        self._button("close_scores", "TAB   CLOSE", (x + w - 160, y + 22, 130, 34), modal=True)
-        self._text("Capture rate, turns, and movement — means are computed over successful captures.",
-                   x + 30, y + 72, font="small", color=self.MUTED)
-        cols = [x + 32, x + 318, x + 452, x + 622, x + 784]
+        self._text("HUMAN VS AI  /  PERFORMANCE", x + 30, y + 25, font="title")
+        self._text("Press TAB to return", x + w - 28, y + 33,
+                   font="small", color=self.MUTED, align="right")
+        self._text("Capture rate, turns, and movement — successful captures only for means.",
+                   x + 30, y + 74, font="small", color=self.MUTED)
+        cols = [x + 32, x + 277, x + 411, x + 590, x + 757]
         header = ["STRATEGY", "EPISODES", "CAPTURE %", "AVG TURNS", "AVG MOVES"]
         for col, label in zip(cols, header):
-            self._text(label, col, y + 114, font="mini", color=self.MUTED)
-        pygame.draw.line(self.screen, self.OUTLINE, (x + 30, y + 142),
-                         (x + w - 30, y + 142), 1)
+            self._text(label, col, y + 117, font="mini", color=self.MUTED)
+        pygame.draw.line(self.screen, self.OUTLINE, (x + 30, y + 146),
+                         (x + w - 30, y + 146), 1)
         rows = []
+        score_error = ""
         try:
-            p = self._human_score_path()
-            human = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
-            unassisted = [item for item in human if item.get("heatmap_used") is False]
-            assisted = [item for item in human if item.get("heatmap_used") is not False]
-            rows.append(self._human_row("Human (no heatmap)", unassisted))
-            rows.append(self._human_row("Human (+ heatmap)", assisted))
-        except (OSError, ValueError, KeyError):
-            rows.extend((("Human (no heatmap)", "—", "—", "—", "—"),
-                         ("Human (+ heatmap)", "—", "—", "—", "—")))
+            human = read_scores(self._human_score_path())
+            completed = [item for item in human if item.get("captured")]
+            count = len(human)
+            rows.append(("Human play", str(count),
+                         f"{100 * len(completed) / count:.1f}%" if count else "—",
+                         f"{sum(r['turns'] for r in completed) / len(completed):.1f}" if completed else "—",
+                         f"{sum(r['distance'] for r in completed) / len(completed):.1f}" if completed else "—"))
+        except (OSError, InvalidScoreHistory) as error:
+            score_error = str(error)
+            rows.append(("Human play", "—", "—", "—", "—"))
         try:
             p = PROJECT_ROOT / "results" / "summary.json"
             summary = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-            for mode, label in (("ai", "HMM-guided AI"), ("baseline", "Sensor-only")):
-                info = summary.get(mode, {})
-                rows.append((label, str(info.get("episodes", "—")),
-                             f"{info['capture_rate_pct']:.1f}%" if info.get("capture_rate_pct") is not None else "—",
-                             f"{info['mean_turns_to_capture']:.1f}" if info.get("mean_turns_to_capture") is not None else "—",
-                             f"{info['mean_movement_to_capture']:.1f}" if info.get("mean_movement_to_capture") is not None else "—"))
-        except (OSError, ValueError, TypeError):
-            rows.extend((("HMM-guided AI", "—", "—", "—", "—"),
-                         ("Sensor-only", "—", "—", "—", "—")))
+        except (OSError, ValueError):
+            summary = {}
+        for mode, label in (("ai", "HMM-guided AI"), ("baseline", "Sensor-only")):
+            try:
+                info = summary[mode]
+                row = (label, str(info["episodes"]),
+                       f"{info['capture_rate_pct']:.1f}%",
+                       f"{info['mean_turns_to_capture']:.1f}" if info.get("mean_turns_to_capture") is not None else "—",
+                       f"{info['mean_movement_to_capture']:.1f}" if info.get("mean_movement_to_capture") is not None else "—")
+            except (KeyError, TypeError, ValueError):
+                row = (label, "—", "—", "—", "—")
+            rows.append(row)
         for row_idx, values in enumerate(rows):
-            ry = y + 162 + row_idx * 68
+            ry = y + 166 + row_idx * 72
             if row_idx % 2 == 0:
-                self._panel(x + 23, ry - 12, w - 46, 52, color=self.SURFACE2, radius=8)
+                self._panel(x + 23, ry - 13, w - 46, 53, color=self.SURFACE2, radius=8)
             for ci, (col, value) in enumerate(zip(cols, values)):
                 self._text(value, col, ry, font="body",
                            color=self.MINT if ci == 2 else self.TEXT)
-        self._text("Human scores track whether the HMM heatmap was used (legacy records default to + heatmap).",
-                   x + 30, y + 458, font="small", color=self.MUTED)
-        self._text("AI results come from 100 paired seeded episodes; human play is not a controlled pair.",
-                   x + 30, y + 482, font="small", color=self.MUTED)
-        self._text("Run python run_evaluation.py to refresh the AI comparison. Press TAB or ESC to close.",
-                   x + 30, y + 522, font="small", color=self.LIGHT)
+        if score_error:
+            self._text(score_error[:84], x + 30, y + 416, font="small", color=self.DANGER)
+        else:
+            self._text("Human scores come from local play. The two AI strategies use paired",
+                       x + 30, y + 416, font="small", color=self.MUTED)
+            self._text("simulations. Human and AI games can use different settings.",
+                       x + 30, y + 439, font="small", color=self.MUTED)
+        self._text("Run python run_evaluation.py to refresh the 100-episode AI comparison.",
+                   x + 30, y + 471, font="small", color=self.LIGHT)
 
     def draw(self) -> None:
         self.hitboxes.clear()
-        self._modal_rect = None
         self.screen.fill(self.BG)
         self._draw_header()
         self._draw_board()
@@ -613,8 +492,7 @@ class GameUI:
             while self.running:
                 self.handle_events()
                 now = pygame.time.get_ticks()
-                if (self.autoplay and not self.show_scores
-                        and self.session.mode != "human"
+                if (self.autoplay and self.session.mode != "human"
                         and not self.session.finished
                         and now - self.last_ai_tick >= self.auto_interval):
                     self._ai_turn()

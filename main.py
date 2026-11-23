@@ -10,11 +10,14 @@ def main() -> None:
     parser.add_argument("--mode", choices=("human", "ai", "baseline"), default="human")
     parser.add_argument("--grid-size", type=int, default=10)
     parser.add_argument("--max-turns", type=int, default=80)
-    parser.add_argument("--accuracy", type=float, default=0.60, help="Probability of exact sensor reading")
+    parser.add_argument("--accuracy", type=float, default=0.60, help="Probability of drawing a zero noise offset")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    ui = GameUI(mode=args.mode, grid_size=args.grid_size, max_turns=args.max_turns,
-                sensor_accuracy=args.accuracy, seed=args.seed)
+    try:
+        ui = GameUI(mode=args.mode, grid_size=args.grid_size, max_turns=args.max_turns,
+                    sensor_accuracy=args.accuracy, seed=args.seed)
+    except ValueError as error:
+        parser.error(str(error))
     ui.run()
 
 

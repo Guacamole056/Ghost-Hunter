@@ -57,7 +57,7 @@ python main.py --mode baseline
 | **P** | Save a screenshot in `results/screenshots/` |
 | **ESC** | Exit |
 
-All important mode controls (including sensor accuracy presets, human capture, and AI autoplay speed) also have clickable buttons.
+All important mode controls also have clickable buttons.
 
 > **Game rule:** Moving onto the ghost does **not** automatically capture it. To win, attempt **C** on the cell where the ghost currently is. A failed attempt uses one turn, provides definite evidence about that cell, and then the ghost moves. This is deliberately consistent for both humans and AI.
 
@@ -75,7 +75,7 @@ All important mode controls (including sensor accuracy presets, human capture, a
 python run_evaluation.py
 ```
 
-The default is **100 paired episodes per automated strategy**, **master seed 42**, **10 × 10 grid**, **80-turn limit** and **60% exact sensor readings**.
+The default is **100 paired episodes per automated strategy**, **master seed 42**, **10 × 10 grid**, **80-turn limit** and **a 60% chance of drawing a zero noise offset**.
 
 Files are saved in `results/`:
 
@@ -89,11 +89,10 @@ Files are saved in `results/`:
 | `03_localization_error.png` | Mean grid localization error across turns |
 | `human_scores.json` | Auto-created after you finish human episodes |
 
-Custom comparison and optional sensitivity/model-mismatch sweep:
+Custom comparison example:
 
 ```bash
 python run_evaluation.py --episodes 100 --seed 42 --grid-size 10 --max-turns 80 --accuracy 0.6
-python run_evaluation.py --sweep
 ```
 
 **Paired fairness:** both hunters face the same generated ghost trajectory, the same noise **offset** at each turn, and the same movement/capture rules. Because their hunter positions differ, the numeric distance readings can differ, as they should. Both hunters use the **same action-selection policy**: the only difference is HMM accumulated belief versus belief reconstructed from the current observation alone.
@@ -103,14 +102,11 @@ python run_evaluation.py --sweep
 | Metric | HMM hunter | Sensor-only |
 | --- | ---: | ---: |
 | Capture success | **100/100 (100%)** | **51/100 (51%)** |
-| Mean turns to capture (successes) | **21.42** (median 18.0) | 34.63 (median 35.0) |
-| Mean movement to capture (successes) | **17.68** | 27.78 |
-| Mean localization error (cells) | **3.125** | 5.952 |
-| Mean true-cell probability | **0.1761** | 0.0583 |
-| Mean belief entropy (bits) | **3.496** | 5.058 |
-| Mean runtime per turn (ms) | 0.0628 | **0.0591** |
+| Mean turns to capture (successes) | **20.60** | 34.02 |
+| Mean movement to capture (successes) | **16.84** | 27.25 |
+| Mean localization error (cells) | **3.167** | 5.881 |
 
-These are measurements for this particular seeded simulation and policy, **not a guarantee** across all noise settings and seeds. Per-episode and per-turn runtimes are in `summary.json` and depend on the machine. Running with `--sweep` also evaluates sensor accuracy (`20%–100%`) and mismatched ghost dynamics (`sensitivity.json`, `04_sensitivity_accuracy.png`). Human scores are collected separately and are not presented as a paired controlled experiment.
+These are measurements for this particular seeded simulation and policy, **not a guarantee** across all noise settings and seeds. Runtime metrics are also in `summary.json` and depend on the machine. Human scores are collected separately and are not presented as a paired controlled experiment.
 
 ## 3. Run the tests
 
@@ -118,7 +114,7 @@ These are measurements for this particular seeded simulation and policy, **not a
 python -m unittest discover -s tests -v
 ```
 
-20 tests check transitions, valid moves, vectorized distance/likelihood equivalence, observation likelihood including clipping, forward normalization, evidence from failed captures, deterministic seeds, grid-size-aware thresholds, biased-ghost scenarios, baseline memorylessness, capture mechanics, chart/sweep export generation, and UI modal/control behavior.
+The suite has 19 tests. It covers grid rules, HMM and sensor calculations, paired exports and human score saving. The six score tests cover older records, damaged files, interrupted writes and concurrent games.
 
 ## 4. Project folder structure
 
@@ -127,23 +123,25 @@ ghost_hunter_project/
 ├── main.py                  # Launch interactive Pygame window
 ├── run_evaluation.py        # 100 paired experiments and charts
 ├── requirements.txt
-├── requirements-report.txt # Optional: regenerate report PDF
+├── requirements-report.txt # Optional: print the current evaluation as a PDF
 ├── ghost_hunter/
 │   ├── core.py              # GhostEnvironment, NoisySensor, HMMTracker, GameSession
 │   ├── agents.py            # Shared planner, two inference strategies
 │   ├── evaluation.py        # Results, metrics, chart generation
 │   ├── ui.py                # Pygame game and scoreboard
+│   ├── scores.py            # Saves human scores and recovers damaged history
 │   └── __init__.py
 ├── scripts/
 │   └── build_report_pdf.py  # Optional PDF report generator
 ├── tests/
 │   ├── test_core.py
 │   ├── test_evaluation.py
-│   └── test_ui.py
+│   └── test_scores.py
 ├── docs/
 │   ├── PROJECT_REPORT.md
 │   ├── ALGORITHM_EXPLAINED.md
 │   ├── DEMO_GUIDE.md
+│   ├── Ghost_Hunter_Project_Report.docx
 │   └── Ghost_Hunter_Project_Report.pdf
 └── results/
     ├── summary.json
@@ -173,11 +171,21 @@ On the **first** reading, use the uniform initial prior (excluding the hunter's 
 
 The source contains all five in-scope features: playable hidden-ghost grid, configurable noisy sensor, HMM+heatmap, autonomous belief-guided hunter, and human vs AI score comparison. The baseline and automated evaluation add the planned scientific comparison. Online multiplayer, real-world sensors, 3D, neural networks, and story generation are intentionally not included.
 
-For the science and demonstration narrative, read `docs/PROJECT_REPORT.md` and `docs/DEMO_GUIDE.md`.
+The full AL-2002 report is in [docs/Ghost_Hunter_Project_Report.pdf](docs/Ghost_Hunter_Project_Report.pdf). Fill in the section, GitHub, submission and contribution fields in [the Word copy](docs/Ghost_Hunter_Project_Report.docx). Both members review and sign the declaration. The report records the supplied default benchmark. If you change the experiment, update the figures, measurements and interpretation in the editable report.
 
-To regenerate the optional printable PDF report after changing the evaluation results:
+After editing, export the Word document to PDF from Word or LibreOffice. If LibreOffice is installed, this command also rebuilds the course PDF:
+
+```bash
+python scripts/build_report_pdf.py
+```
+
+To print a separate summary of the latest files in `results/`:
 
 ```bash
 python -m pip install -r requirements-report.txt
-python scripts/build_report_pdf.py
+python scripts/build_report_pdf.py --summary
 ```
+
+The summary is written to `results/Evaluation_Summary.pdf`. The demo sequence and viva questions are in [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md).
+
+If a human score file is damaged, finishing the next manual game saves its original bytes in a uniquely named `results/human_scores.*.bak` file and writes the new result to `results/human_scores.json`. Readable entries from a partly damaged list carry forward. An unreadable JSON document starts a new active history. The filenames appear in the game's status line.

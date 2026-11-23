@@ -4,12 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .core import DIRECTIONS, GameSession, cell_index, distance_matrix
-
-
-def capture_threshold(grid_size: int) -> float:
-    """Grid-size-aware capture probability threshold (0.06 on a 10x10 board)."""
-    return min(0.50, 6.0 / (grid_size * grid_size))
+from .core import DIRECTIONS, GameSession, manhattan, position_for, cell_index
 
 
 class HunterAgent:
@@ -37,38 +32,28 @@ class HunterAgent:
 
         # Attempt a capture at the current cell when its probability justifies it.
         # Captures are the ONLY way to win; simply walking onto the ghost isn't enough.
-        if current_probability >= capture_threshold(n):
+        if current_probability >= 0.06:
             return "capture"
 
         # One-step forecast is used ONLY to plan the next movement, not to carry
         # past measurements into the baseline's next belief. This keeps the
         # action policy identical across the two experimental conditions.
         forecast = belief @ session.tracker.transition_matrix
-        dists = distance_matrix(n)
-        actions: list[str] = []
-        dest_indices: list[int] = []
+        positions = [position_for(i, n) for i in range(n * n)]
+        options = []
         # 'capture' with low current probability acts as a stationary probe:
         # if it misses, the ghost moves and another noisy reading arrives.
         # Such unsuccessful probes still cost one turn and are counted.
         for action, (dr, dc) in {**DIRECTIONS, "capture": (0, 0)}.items():
             dest = (current[0] + dr, current[1] + dc)
-            if 0 <= dest[0] < n and 0 <= dest[1] < n:
-                actions.append(action)
-                dest_indices.append(cell_index(dest, n))
-
-        idx_arr = np.array(dest_indices, dtype=np.intp)
-        forecast_probs = forecast[idx_arr]
-        expected_distances = dists[idx_arr] @ forecast
-        # Scale distance penalty inversely with board diameter (0.02 on 10x10).
-        distance_weight = 0.36 / (2 * (n - 1))
-        scores = 3.0 * forecast_probs - distance_weight * expected_distances
-
-        # Round to 12 decimals so exact geometric ties break deterministically
-        # regardless of floating-point summation order.
-        options = [
-            (round(float(sc), 12), round(float(prob), 12),
-             round(-float(dist), 12), action)
-            for sc, prob, dist, action in zip(
-                scores, forecast_probs, expected_distances, actions)
-        ]
+            if not (0 <= dest[0] < n and 0 <= dest[1] < n):
+                continue
+            forecast_probability = float(forecast[cell_index(dest, n)])
+            distance_to_distribution = sum(
+                float(prob) * manhattan(dest, pos)
+                for prob, pos in zip(forecast, positions))
+            # Prefer likely interception cells, then expected closeness.
+            score = 3.0 * forecast_probability - 0.02 * distance_to_distribution
+            options.append((score, forecast_probability,
+                            -distance_to_distribution, action))
         return max(options)[-1]

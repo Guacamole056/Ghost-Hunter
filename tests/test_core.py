@@ -2,10 +2,10 @@ import unittest
 
 import numpy as np
 
-from ghost_hunter.agents import HunterAgent, capture_threshold
+from ghost_hunter.agents import HunterAgent
 from ghost_hunter.core import (
     EpisodeScenario, GameSession, GhostEnvironment, HMMTracker,
-    NoisySensor, cell_index, distance_matrix, manhattan, neighbors, position_for,
+    NoisySensor, cell_index, manhattan, neighbors, position_for,
 )
 
 
@@ -144,32 +144,6 @@ class TestSessionAndAgents(unittest.TestCase):
         # Static inspection guards against accidental use of ground-truth coordinates.
         import inspect
         self.assertNotIn("ghost_position", inspect.getsource(HunterAgent.choose_action))
-
-    def test_vectorized_distance_and_likelihood_match_scalar(self):
-        n = 7
-        dm = distance_matrix(n)
-        for i in range(n * n):
-            for j in range(n * n):
-                self.assertEqual(int(dm[i, j]), manhattan(position_for(i, n), position_for(j, n)))
-        sensor = NoisySensor(0.6, n)
-        for reading in (0, 3, sensor.max_distance):
-            vec = sensor.likelihood_vector(reading, (2, 4))
-            expected = np.array([
-                sensor.likelihood(reading, manhattan((2, 4), position_for(i, n)))
-                for i in range(n * n)
-            ])
-            np.testing.assert_allclose(vec, expected)
-
-    def test_grid_size_aware_capture_threshold_and_biased_ghost(self):
-        self.assertAlmostEqual(capture_threshold(10), 0.06)
-        self.assertGreater(capture_threshold(5), capture_threshold(10))
-        self.assertLess(capture_threshold(16), capture_threshold(10))
-        sensor = NoisySensor(0.6, 8)
-        biased = EpisodeScenario.generate(
-            master_seed=42, episode_id=0, grid_size=8, max_turns=30,
-            hunter_start=(4, 4), sensor=sensor, ghost_bias=0.7)
-        for before, after in zip(biased.ghost_path, biased.ghost_path[1:]):
-            self.assertEqual(manhattan(before, after), 1)
 
 
 if __name__ == "__main__":

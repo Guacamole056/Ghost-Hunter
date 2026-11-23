@@ -1,0 +1,2 @@
+# Optional dependency for scripts/build_report_pdf.py --summary.
+reportlab>=4,<5

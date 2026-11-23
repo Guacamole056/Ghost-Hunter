@@ -167,15 +167,7 @@ class GhostEnvironment:
             ghost_position = eligible[int(self.random_generator.integers(len(eligible)))]
         self.ghost_position = ghost_position
 
-    def step_ghost(self, predefined: Position | None = None) -> Position:
-        candidates = neighbors(self.ghost_position, self.grid_size)
-        if predefined is not None:
-            if predefined not in candidates:
-                raise ValueError("Ghost must move to a neighboring cardinal cell.")
-            self.ghost_position = predefined
-        else:
-            self.ghost_position = candidates[int(self.random_generator.integers(len(candidates)))]
-        return self.ghost_position
+
 
     def move_hunter(self, direction: str) -> bool:
         if direction not in DIRECTIONS:

@@ -1,0 +1,41 @@
+{
+  "configuration": {
+    "episodes_per_strategy": 100,
+    "master_seed": 42,
+    "grid_size": 10,
+    "max_turns": 80,
+    "sensor_accuracy": 0.6,
+    "ghost_trajectories_paired": true,
+    "noise_offsets_paired": true
+  },
+  "ai": {
+    "episodes": 100,
+    "captures": 100,
+    "capture_rate_pct": 100.0,
+    "mean_turns_to_capture": 21.42,
+    "median_turns_to_capture": 18.0,
+    "std_turns_to_capture": 13.83,
+    "mean_turns_all_episodes": 21.42,
+    "mean_movement_to_capture": 17.68,
+    "mean_localization_error": 3.125,
+    "mean_true_cell_probability": 0.1761,
+    "mean_entropy": 3.496,
+    "mean_runtime_ms": 1.346,
+    "mean_runtime_ms_per_turn": 0.0628
+  },
+  "baseline": {
+    "episodes": 100,
+    "captures": 51,
+    "capture_rate_pct": 51.0,
+    "mean_turns_to_capture": 34.63,
+    "median_turns_to_capture": 35.0,
+    "std_turns_to_capture": 22.39,
+    "mean_turns_all_episodes": 56.86,
+    "mean_movement_to_capture": 27.78,
+    "mean_localization_error": 5.952,
+    "mean_true_cell_probability": 0.0583,
+    "mean_entropy": 5.058,
+    "mean_runtime_ms": 3.363,
+    "mean_runtime_ms_per_turn": 0.0591
+  }
+}

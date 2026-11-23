@@ -313,7 +313,7 @@ class GameSession:
             entropy=float(-np.sum(positive * np.log2(positive))),
         ))
 
-    def take_action(self, action: str) -> bool:
+    def take_action(self, action: str) -> bool:            ## shared by all 3 model (human , AI , BASELINE)    
         """Use one turn: act at time t, then ghost moves, then observe time t+1.
 
         A successful capture tests the ghost's position *before* its next move.

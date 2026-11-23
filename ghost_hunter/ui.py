@@ -103,6 +103,16 @@ class GameUI:
         self.screen.blit(surface, rect)
         return rect
 
+    def _panel(self, x: int, y: int, w: int, h: int, color=None, radius=15,
+           outline=False) -> None:
+    rect = pygame.Rect(x, y, w, h)
+    fill = self.SURFACE if color is None else color
+    layers = [(fill, 0)]                    # width 0 = filled
+    if outline:
+        layers.append((self.OUTLINE, 1))    # 1px ring drawn on top
+    for layer_color, width in layers:
+        pygame.draw.rect(self.screen, layer_color, rect, width, border_radius=radius)
+
 
     def _button(self, key: str, label: str, rect: tuple[int, int, int, int], *,
                 active: bool = False, strong: bool = False) -> None:

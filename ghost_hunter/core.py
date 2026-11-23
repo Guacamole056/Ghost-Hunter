@@ -183,14 +183,13 @@ class GhostEnvironment:
         dr, dc = DIRECTIONS[direction]
         r, c = self.hunter_position
         to = (r + dr, c + dc)
+        
         if not (0 <= to[0] < self.grid_size and 0 <= to[1] < self.grid_size):
             return False
         self.hunter_position = to
         return True
-
     def check_capture(self) -> bool:
         return self.hunter_position == self.ghost_position
-
 
 @dataclass(frozen=True)
 class EpisodeScenario:

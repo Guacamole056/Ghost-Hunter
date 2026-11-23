@@ -1,11 +1,9 @@
 """Pygame desktop UI: human play, AI demonstration, belief heatmap, and scores."""
 
 from __future__ import annotations
-
 import json
 from datetime import datetime
 from pathlib import Path
-
 try:
     import pygame
 except ImportError as exc:
@@ -34,7 +32,6 @@ class GameUI:
     LIGHT = (172, 244, 222)
     DANGER = (233, 145, 122)
     BOARD_BG = (24, 42, 50)
-
     def __init__(self, *, mode: str = "human", grid_size: int = 10,
                  max_turns: int = 80, sensor_accuracy: float = 0.60,
                  seed: int = 42):
